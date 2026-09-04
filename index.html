@@ -1673,8 +1673,13 @@ function AdminDashboard({
         if (newStudentRow) {
           const { data: profileData } = await supabaseClient.from("profiles").select("id, username, full_name, name_ar, contact_email, phone").eq("id", newStudentRow.profile_id).single();
           const profile = profileData || {};
-          savedStudent = mapStudentRow({ ...newStudentRow, username: profile.username || newStudentRow.username, name: profile.full_name || newStudentRow.name, name_ar: profile.name_ar || newStudentRow.name_ar, contact_email: profile.contact_email || newStudentRow.contact_email, phone: profile.phone || newStudentRow.phone });
-        }
+          savedStudent = mapStudentRow({ ...newStudentRow, id: (newStudentRow.id || '').toString().toUpperCase(),
+  username: profile.username || newStudentRow.username,
+  name: profile.full_name || newStudentRow.name,
+  name_ar: profile.name_ar || newStudentRow.name_ar,
+  contact_email: profile.contact_email || newStudentRow.contact_email,
+  phone: profile.phone || newStudentRow.phone
+}
       } else {
         savedStudent = students.find((student) => student.profileId === form.profileId);
       }
