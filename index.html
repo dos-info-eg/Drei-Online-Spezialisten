@@ -1678,9 +1678,10 @@ function AdminDashboard({
   name: profile.full_name || newStudentRow.name,
   name_ar: profile.name_ar || newStudentRow.name_ar,
   contact_email: profile.contact_email || newStudentRow.contact_email,
-  phone: profile.phone || newStudentRow.phone
-}
-      } else {
+  phone: profile.phone || newStudentRow.phone });
+        }
+
+        else {
         savedStudent = students.find((student) => student.profileId === form.profileId);
       }
       if (!savedStudent) savedStudent = { ...form, profileId: form.profileId || newStudentRow?.profile_id, id: form.id, name: form.name };
