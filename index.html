@@ -144,6 +144,7 @@ const LIBRARY_CATEGORIES = [
 const INSTRUCTOR_PAGES = [
   { value: "home", label: "الرئيسية — Startseite" },
   { value: "students", label: "الطلاب المسندون — Zugewiesene Studenten" },
+  { value: "work-hours", label: "الحالات وساعات العمل — Arbeitszeit" },
   { value: "library", label: "المكتبة — Bibliothek" },
   { value: "dictionaries", label: "القواميس — Wörterbücher" },
   { value: "requests", label: "الطلبات — Anfragen" },
@@ -189,11 +190,16 @@ const DEFAULT_EMPLOYEE_PERMISSIONS = {
   admin: EMPLOYEE_PERMISSION_OPTIONS.map((item) => item.value),
   accountant: ["create_students", "edit_students", "view_finance", "manage_finance", "view_work_hours", "view_library", "return_to_employee_management"],
   staff: ["view_work_hours", "return_to_employee_management"],
+  instructor: ["view_work_hours", "edit_work_hours", "view_library"],
 };
 
 function employeeHasPermission(profile, permission) {
   if (profile?.role === "admin") return true;
-  const permissions = Array.isArray(profile?.permissions) ? profile.permissions : (DEFAULT_EMPLOYEE_PERMISSIONS[profile?.role] || []);
+  let permissions = profile?.permissions;
+  if (typeof permissions === "string") {
+    try { permissions = JSON.parse(permissions); } catch (error) { permissions = []; }
+  }
+  permissions = Array.isArray(permissions) ? permissions : (DEFAULT_EMPLOYEE_PERMISSIONS[profile?.role] || []);
   return permissions.includes(permission);
 }
 
@@ -1599,6 +1605,10 @@ function AdminDashboard({
     setSaving(true);
     try {
       const isNewStudent = !form.profileId;
+      if (profile?.role === "admin" && form.libraryAccessEnabled === true && !window.confirm("تأكيد فتح المكتبة لهذا الطالب؟ سيتم منحه صلاحية الوصول إلى المواد التعليمية.")) {
+        setSaving(false);
+        return;
+      }
       if (isNewStudent) {
         await callManageUsers({
           action: "create_user",
@@ -1675,9 +1685,7 @@ function AdminDashboard({
           const profile = profileData || {};
           savedStudent = mapStudentRow({ ...newStudentRow, username: profile.username || newStudentRow.username, name: profile.full_name || newStudentRow.name, name_ar: profile.name_ar || newStudentRow.name_ar, contact_email: profile.contact_email || newStudentRow.contact_email, phone: profile.phone || newStudentRow.phone });
         }
-
-
-        else {
+      } else {
         savedStudent = students.find((student) => student.profileId === form.profileId);
       }
       if (!savedStudent) savedStudent = { ...form, profileId: form.profileId || newStudentRow?.profile_id, id: form.id, name: form.name };
@@ -1885,7 +1893,7 @@ function AdminDashboard({
                   onClick={() => goTo("requests")}
                 />
 
-                {!isAccountantRestricted && (
+                {employeeHasPermission(profile, "manage_instructors") && (
                   <MenuItem
                     icon={<Icon.users />}
                     label="المحاضرون — Dozenten"
@@ -1894,7 +1902,7 @@ function AdminDashboard({
                   />
                 )}
 
-                {!isAccountantRestricted && (
+                {employeeHasPermission(profile, "manage_finance") && (
                   <MenuItem
                     icon={<Icon.wallet />}
                     label="النظام المالي — Finanzsystem"
@@ -1909,10 +1917,10 @@ function AdminDashboard({
                   color="#2563EB"
                   onClick={() => goTo("accounts")}
                 />}
-                <MenuItem icon={<Icon.history />} label="ساعات العمل والحالات — Arbeitszeit" color="#0F766E" onClick={() => goTo("work-hours")} />
-                {isAdmin && <MenuItem icon={<Icon.list />} label="المكتبة — Bibliothek" color="#B45309" onClick={() => goTo("library")} />}
+                {employeeHasPermission(profile, "view_work_hours") && <MenuItem icon={<Icon.history />} label="ساعات العمل والحالات — Arbeitszeit" color="#0F766E" onClick={() => goTo("work-hours")} />}
+                {employeeHasPermission(profile, "manage_library") && <MenuItem icon={<Icon.list />} label="المكتبة — Bibliothek" color="#B45309" onClick={() => goTo("library")} />}
 
-                {!isAccountantRestricted && (
+                {employeeHasPermission(profile, "view_activity_log") && (
                   <MenuItem
                     icon={<Icon.history />}
                     label="سجل النشاط — Aktivitätsprotokoll"
@@ -1969,7 +1977,7 @@ function AdminDashboard({
           onBack={() => goTo("dashboard")}
         />
       )}
-      {!isAccountantRestricted && adminView === "financial" && (
+      {employeeHasPermission(profile, "manage_finance") && adminView === "financial" && (
         <FinancialPage
           students={students}
           showTotals={showFinancialTotals}
@@ -1988,7 +1996,7 @@ function AdminDashboard({
           onBack={() => goTo("dashboard")}
         />
       )}
-      {!isAccountantRestricted && adminView === "log" && <ActivityLogPage activityLog={activityLog} onBack={() => goTo("dashboard")} />}
+      {employeeHasPermission(profile, "view_activity_log") && adminView === "log" && <ActivityLogPage activityLog={activityLog} onBack={() => goTo("dashboard")} />}
       {adminView === "student" && selectedStudent && (
         <StudentDetailsPage
           student={selectedStudent}
@@ -2352,9 +2360,19 @@ function EmployeeWorkPage({ profile, employees, sessions, onSaveSession, onUpdat
     return () => { if (alarmRef.current) { window.clearInterval(alarmRef.current); alarmRef.current = null; } };
   }, [alarmActive]);
 
+  useEffect(() => {
+    document.querySelectorAll("select").forEach((select) => {
+      if (!Array.from(select.options).some((option) => option.textContent === "يعمل")) return;
+      const current = select.value;
+      select.innerHTML = WORK_STATUS_OPTIONS.map((option) => `<option value="${option[0]}">${option[1]} — ${option[2]}</option>`).join("");
+      select.value = current;
+    });
+  }, [sessions]);
+
   function duration(ms) { const total = Math.floor(ms / 1000); return `${String(Math.floor(total / 3600)).padStart(2, "0")}:${String(Math.floor(total / 60) % 60).padStart(2, "0")}:${String(total % 60).padStart(2, "0")}`; }
   function stopAlarm() { setAlarmActive(false); if (alarmRef.current) { window.clearInterval(alarmRef.current); alarmRef.current = null; } }
-  function startBreak(minutes) { if (!active) return; stopAlarm(); const until = Date.now() + minutes * 60000; setBreakUntil(until); saveLS(`breakUntil_${profile.id}`, until); onUpdateSession(active.id, { status: "break", break_minutes: active.breakMinutes + minutes }); }
+  function changeStatus(id, status) { if (!canEdit && !isAdmin) return; if (window.confirm(`تأكيد تغيير الحالة إلى ${workStatusLabel(status)}؟`)) { stopAlarm(); onUpdateSession(id, { status }); } }
+  function startBreak(minutes) { if (!active || !canEdit) return; stopAlarm(); const until = Date.now() + minutes * 60000; setBreakUntil(until); saveLS(`breakUntil_${profile.id}`, until); onUpdateSession(active.id, { status: "break", break_minutes: active.breakMinutes + minutes }); }
   function exportCsv() {
     const lines = [["الموظف", "التاريخ", "بداية الدوام", "نهاية الدوام", "الدقائق", "الحالة"]];
     sessions.forEach((item) => { const employee = employees.find((entry) => entry.id === item.employeeProfileId); lines.push([employee?.full_name || employee?.username || item.employeeProfileId, item.workDate, item.startedAt || "", item.endedAt || "", item.breakMinutes, item.status]); });
@@ -2403,7 +2421,6 @@ function AdminAccountsPage({ adminAccounts, refreshAdmins, currentAdmin, addLog,
         contact_email: email || `${uname}@dos-academy.local`,
         hire_date: form.hireDate || new Date().toISOString().slice(0, 10),
         salary: Number(form.salary) || 0,
-        job_title: form.jobTitle.trim() || "موظف",
         permissions: form.permissions,
       });
       await refreshAdmins();
@@ -2420,7 +2437,7 @@ function AdminAccountsPage({ adminAccounts, refreshAdmins, currentAdmin, addLog,
     if (!editingId || !onUpdateAccount) return;
     setBusy(true);
     try {
-      await onUpdateAccount(editingId, { permissions: form.permissions, role: role, job_title: form.jobTitle.trim() || "موظف" });
+      await onUpdateAccount(editingId, { permissions: form.permissions, role });
       setEditingId(null);
       setForm({ username: "", password: "", name: "", email: "", role: "staff", jobTitle: "موظف", hireDate: "", salary: "", permissions: DEFAULT_EMPLOYEE_PERMISSIONS.staff });
     } catch (e) { setError(e.message || "تعذر حفظ الصلاحيات."); } finally { setBusy(false); }
@@ -3047,7 +3064,7 @@ function LibraryPage({ books, initialLevel, editable, onAdd, onDelete, onUpdate,
     {libraryMessage && <p className="mb-3 rounded-lg px-3 py-2 text-xs" style={{ backgroundColor: libraryMessage.includes("بنجاح") ? "#EAF6EC" : "#FBE7E9", color: libraryMessage.includes("بنجاح") ? "#1E7A38" : COLORS.red }}>{libraryMessage}</p>}
     {editable && <form onSubmit={submit} className="grid grid-cols-1 sm:grid-cols-3 gap-2 mb-4"><select className={inputCls} style={inputStyle} value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })}>{dictionariesOnly ? <option value="dictionary">قاموس — Wörterbuch</option> : LIBRARY_CATEGORIES.map((category) => <option key={category.value} value={category.value}>{category.label}</option>)}</select><input required className={inputCls} style={inputStyle} placeholder="اسم الكتاب أو الملف" value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} /><input type="url" className={inputCls} style={inputStyle} placeholder="رابط خارجي اختياري" value={form.url} onChange={(e) => setForm({ ...form, url: e.target.value })} /><label className="sm:col-span-3 flex cursor-pointer items-center justify-center rounded-lg border px-3 py-2 text-sm" style={{ borderColor: COLORS.border, color: COLORS.navy }}><input type="file" accept=".pdf,.epub,.html,.mp3,.wav,.m4a,.mp4,image/*" className="hidden" onChange={(e) => setForm({ ...form, file: e.target.files?.[0] || null })} />{form.file ? `تم اختيار: ${form.file.name}` : "رفع PDF أو ملف صوتي أو كتاب من الجهاز"}</label><button type="submit" className="sm:col-span-3 px-4 py-2 rounded-lg text-sm font-semibold" style={{ backgroundColor: COLORS.navy, color: "#fff" }}>{libraryType === "digital" ? "إضافة كتاب رقمي" : "إضافة كتاب ورقي أو ملف مرفق"}</button></form>}
     {bundledCourses.length > 0 && <div className="mb-4 rounded-xl border p-3" style={{ borderColor: COLORS.gold, backgroundColor: "#FFFBEB" }}><div className="flex items-center justify-between gap-2 mb-2"><p className="text-xs font-semibold" style={{ color: COLORS.navy }}>مواد المنهج الأساسية — Inhalte der Akademie</p><span className="text-[11px]" style={{ color: COLORS.subtle }}>فتح داخل البوابة</span></div><div className="grid grid-cols-1 md:grid-cols-2 gap-2">{bundledCourses.map((course) => <button key={course.url} type="button" onClick={() => setViewerBook({ ...course, libraryType: "digital", category: "course" })} className="text-right rounded-lg border p-3 transition hover:-translate-y-0.5" style={{ borderColor: COLORS.border, backgroundColor: "#fff" }}><span className="block text-sm font-semibold" style={{ color: COLORS.navy }}>{course.title}</span><span className="block mt-1 text-xs" style={{ color: COLORS.subtle }}>{course.description}</span></button>)}</div></div>}
-    <div className="space-y-2">{displayBooks.length === 0 && bundledCourses.length === 0 ? <p className="text-sm" style={{ color: COLORS.subtle }}>لا توجد كتب مضافة لهذا المستوى بعد.</p> : (dictionariesOnly ? [{ value: "dictionary", label: "القواميس" }] : LIBRARY_CATEGORIES).map((category) => { const categoryBooks = displayBooks.filter((book) => book.category === category.value); return categoryBooks.length ? <div key={category.value} className="border-t pt-2" style={{ borderColor: COLORS.border }}><p className="text-xs font-semibold mb-1" style={{ color: COLORS.subtle }}>{category.label}</p>{categoryBooks.map((book) => <div key={book.id} className="py-2 border-b last:border-b-0" style={{ borderColor: COLORS.border }}>{editingId === book.id ? <div className="grid grid-cols-1 sm:grid-cols-2 gap-2"><input className={inputCls} style={inputStyle} value={editForm.title} onChange={(e) => setEditForm({ ...editForm, title: e.target.value })} /><input className={inputCls} style={inputStyle} value={editForm.url} onChange={(e) => setEditForm({ ...editForm, url: e.target.value })} /><button type="button" onClick={() => { onUpdate(book.id, editForm); setEditingId(null); }} className="text-xs font-semibold" style={{ color: COLORS.navy }}>حفظ</button><button type="button" onClick={() => setEditingId(null)} className="text-xs" style={{ color: COLORS.subtle }}>إلغاء</button></div> : <div className="flex items-center justify-between gap-2">{isHtmlLibraryFile(book) ? <button type="button" onClick={() => setViewerBook(book)} className="text-sm font-semibold underline" style={{ color: COLORS.navy, opacity: book.visible === false ? 0.45 : 1 }}>{book.title}</button> : <a href={book.url} target="_blank" rel="noreferrer" className="text-sm font-semibold underline" style={{ color: COLORS.navy, opacity: book.visible === false ? 0.45 : 1 }}>{book.title}</a>}{editable && <div className="flex items-center gap-2"><button type="button" onClick={() => beginEdit(book)} className="text-xs" style={{ color: COLORS.navy }}>تعديل</button><button type="button" onClick={() => onUpdate(book.id, { visible: book.visible === false })} className="text-xs" style={{ color: book.visible === false ? "#1E7A38" : COLORS.goldDark }}>{book.visible === false ? "إظهار" : "إخفاء"}</button><button type="button" onClick={() => onDelete(book.id)} className="text-xs" style={{ color: COLORS.red }}>حذف</button></div>}</div>}</div>)}</div> : null; })}</div>}
+    <div className="space-y-2">{displayBooks.length === 0 && bundledCourses.length === 0 ? <p className="text-sm" style={{ color: COLORS.subtle }}>لا توجد كتب مضافة لهذا المستوى بعد.</p> : (dictionariesOnly ? [{ value: "dictionary", label: "القواميس" }] : LIBRARY_CATEGORIES).map((category) => { const categoryBooks = displayBooks.filter((book) => book.category === category.value); if (!categoryBooks.length) return null; return <div key={category.value} className="border-t pt-2" style={{ borderColor: COLORS.border }}><p className="text-xs font-semibold mb-1" style={{ color: COLORS.subtle }}>{category.label}</p>{categoryBooks.map((book) => <div key={book.id} className="py-2 border-b last:border-b-0" style={{ borderColor: COLORS.border }}>{editingId === book.id ? <div className="grid grid-cols-1 sm:grid-cols-2 gap-2"><input className={inputCls} style={inputStyle} value={editForm.title} onChange={(e) => setEditForm({ ...editForm, title: e.target.value })} /><input className={inputCls} style={inputStyle} value={editForm.url} onChange={(e) => setEditForm({ ...editForm, url: e.target.value })} /><button type="button" onClick={() => { onUpdate(book.id, editForm); setEditingId(null); }} className="text-xs font-semibold" style={{ color: COLORS.navy }}>حفظ</button><button type="button" onClick={() => setEditingId(null)} className="text-xs" style={{ color: COLORS.subtle }}>إلغاء</button></div> : <div className="flex items-center justify-between gap-2">{isHtmlLibraryFile(book) ? <button type="button" onClick={() => setViewerBook(book)} className="text-sm font-semibold underline" style={{ color: COLORS.navy, opacity: book.visible === false ? 0.45 : 1 }}>{book.title}</button> : <a href={book.url} target="_blank" rel="noreferrer" className="text-sm font-semibold underline" style={{ color: COLORS.navy, opacity: book.visible === false ? 0.45 : 1 }}>{book.title}</a>}{editable && <div className="flex items-center gap-2"><button type="button" onClick={() => beginEdit(book)} className="text-xs" style={{ color: COLORS.navy }}>تعديل</button><button type="button" onClick={() => onUpdate(book.id, { visible: book.visible === false })} className="text-xs" style={{ color: book.visible === false ? "#1E7A38" : COLORS.goldDark }}>{book.visible === false ? "إظهار" : "إخفاء"}</button><button type="button" onClick={() => onDelete(book.id)} className="text-xs" style={{ color: COLORS.red }}>حذف</button></div>}</div>}</div>)}</div>; })}</div>}
     {viewerBook && <LibraryFileViewer book={viewerBook} onClose={() => setViewerBook(null)} />}
   </InfoCard>;
 }
@@ -3608,7 +3625,7 @@ function StudentPortal({ student, attendance, libraryBooks, requests, onSubmitRe
 
 /* --------------------------------- Instructor Portal --------------------------------- */
 
-function InstructorPortal({ profile, instructor, students, attendance, libraryBooks, refreshMyStudents, refreshInstructor, refreshAttendance, refreshLibrary, requests, onUpdateRequest, onDeleteRequest, onUpdateLibrary, onLogout }) {
+function InstructorPortal({ profile, instructor, students, attendance, libraryBooks, workSessions, onSaveWorkSession, onUpdateWorkSession, refreshMyStudents, refreshInstructor, refreshAttendance, refreshLibrary, requests, onUpdateRequest, onDeleteRequest, onUpdateLibrary, onLogout }) {
   const [dir, setDir] = useState("rtl");
   const [studentQuery, setStudentQuery] = useState("");
   const instructorPageKey = `instructorPortalPage_${profile.id}`;
@@ -3773,6 +3790,7 @@ function InstructorPortal({ profile, instructor, students, attendance, libraryBo
       <div className="max-w-5xl mx-auto px-5 md:px-8 py-8">
         {instructorPage !== "home" && <button type="button" onClick={() => setInstructorPage("home")} className="flex items-center gap-1.5 text-sm font-semibold mb-5" style={{ color: COLORS.navy }}><Icon.back /> العودة للرئيسية — Zurück</button>}
         {instructorPage === "requests" && <RequestsPage requests={requests} onUpdate={handleRequestUpdate} onDelete={handleRequestDelete} onBack={() => { setUnreadRequestIds([]); setInstructorPage("home"); }} />}
+        {instructorPage === "work-hours" && <EmployeeWorkPage profile={profile} employees={[]} sessions={workSessions || []} onSaveSession={onSaveWorkSession} onUpdateSession={onUpdateWorkSession} />}
         {instructorPage === "library" && <LibraryPage books={libraryBooks} initialLevel={students[0]?.level} editable onAdd={addLibraryBook} onUpdate={onUpdateLibrary} onDelete={async (id) => { await supabaseClient.from("course_library").delete().eq("id", id); await refreshLibrary(); }} />}
         {instructorPage === "dictionaries" && <LibraryPage books={libraryBooks} initialLevel={students[0]?.level} editable dictionariesOnly onAdd={async (book) => { await supabaseClient.from("course_library").insert({ level: book.level, category: "dictionary", title: book.title.trim(), url: book.url.trim(), visible: true, instructor_profile_id: profile.id }); await refreshLibrary(); }} onUpdate={onUpdateLibrary} onDelete={async (id) => { await supabaseClient.from("course_library").delete().eq("id", id); await refreshLibrary(); }} />}
         {instructorPage === "other" && <InfoCard labelAr="أخرى" labelDe="Weitere"><p className="text-sm" style={{ color: COLORS.ink }}>يمكن استخدام هذه الصفحة لإضافة ملاحظات أو أدوات خاصة بالأكاديمية.</p></InfoCard>}
@@ -4169,6 +4187,7 @@ function App() {
   async function updateStudentRequest(id, changes) {
     const targetRequest = requests.find((item) => item.id === id) || null;
     if (targetRequest?.request_type === "library_payment" && changes.status && profile?.role !== "admin") return;
+    if (targetRequest?.request_type === "library_payment" && changes.status === "approved" && profile?.role === "admin" && !window.confirm("تأكيد فتح المكتبة لهذا الطالب؟ سيتم تفعيل وصوله إلى المواد التعليمية.")) return;
     if (profile?.role === "accountant" && Object.keys(changes).some((key) => key !== "admin_note")) return;
     const { libraryAccessPassword, ...requestChanges } = changes;
     const { error } = await supabaseClient.from("student_requests").update({ ...requestChanges, updated_at: new Date().toISOString() }).eq("id", id);
@@ -4346,7 +4365,7 @@ function App() {
     if (["admin", "accountant", "staff"].includes(p.role)) {
       await Promise.all([refreshStudents(), refreshInstructors(), refreshAdmins(), refreshLog(), refreshWorkSessions(), refreshLibrary(), refreshRequests("admin", p.id)]);
     } else if (p.role === "instructor") {
-      await Promise.all([refreshMyStudents(p.id), refreshMyInstructor(p.id), refreshAttendance({ instructorProfileId: p.id }), refreshLibrary(), refreshRequests("instructor", p.id)]);
+      await Promise.all([refreshMyStudents(p.id), refreshMyInstructor(p.id), refreshAttendance({ instructorProfileId: p.id }), refreshWorkSessions(), refreshLibrary(), refreshRequests("instructor", p.id)]);
     } else if (p.role === "student") {
       await Promise.all([refreshMyRecord(p.id), refreshAttendance({ studentProfileId: p.id }), refreshLibrary(), refreshRequests("student", p.id)]);
     }
@@ -4495,6 +4514,9 @@ function App() {
           students={myStudents}
           attendance={attendance}
           libraryBooks={libraryBooks}
+          workSessions={workSessions}
+          onSaveWorkSession={saveWorkSession}
+          onUpdateWorkSession={updateWorkSession}
           refreshLibrary={refreshLibrary}
           onUpdateLibrary={updateLibraryBook}
           requests={requests.filter((request) => request.request_type !== "payment")}
