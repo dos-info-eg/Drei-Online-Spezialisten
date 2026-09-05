@@ -1040,7 +1040,6 @@ function StudentFormModal({ initial, onSave, onClose, isNew, existingIds, instru
     <option value="paused">متوقف — Pausiert</option>
   </select>
 </Field>
-
 {/* يظهر فقط عند اختيار "متوقف" */}
 {form.status === "paused" && (
   <Field label="سبب التوقف — Pausierungsgrund">
