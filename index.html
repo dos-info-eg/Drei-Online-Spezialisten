@@ -1059,7 +1059,7 @@ function StudentFormModal({ initial, onSave, onClose, isNew, existingIds, instru
       <option value="other">أخرى — Sonstiges</option>
     </select>
   </Field>
-            <Field label="رصيد محفظة DOS — Wallet-Guthaben">
+  <Field label="رصيد محفظة DOS — Wallet-Guthaben">
               <input type="number" className={inputCls} style={inputStyle} value={form.wallet} onChange={(e) => set("wallet", Number(e.target.value))} />
             </Field>
             <Field label="العملة — Währung">
