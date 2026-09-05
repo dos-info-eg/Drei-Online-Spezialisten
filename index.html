@@ -1030,11 +1030,35 @@ function StudentFormModal({ initial, onSave, onClose, isNew, existingIds, instru
               </select>
             </Field>
             <Field label="الحالة — Status">
-              <select className={inputCls} style={inputStyle} value={form.status} onChange={(e) => set("status", e.target.value)}>
-                <option value="active">نشط — Aktiv</option>
-                <option value="paused">متوقف — Pausiert</option>
-              </select>
-            </Field>
+  <select 
+    className={inputCls} 
+    style={inputStyle} 
+    value={form.status} 
+    onChange={(e) => set("status", e.target.value)}
+  >
+    <option value="active">نشط — Aktiv</option>
+    <option value="paused">متوقف — Pausiert</option>
+  </select>
+</Field>
+
+{/* يظهر فقط عند اختيار "متوقف" */}
+{form.status === "paused" && (
+  <Field label="سبب التوقف — Pausierungsgrund">
+    <select 
+      className={inputCls} 
+      style={inputStyle} 
+      value={form.pauseReason || ""} 
+      onChange={(e) => set("pauseReason", e.target.value)}
+    >
+      <option value="">اختر السبب — Grund auswählen</option>
+      <option value="financial">مالي — Finanzielle Gründe</option>
+      <option value="personal">أسباب شخصية — Persönliche Gründe</option>
+      <option value="schedule">جدول زمني — Zeitplan</option>
+      <option value="illness">مرض — Krankheit</option>
+      <option value="relocation">انتقال — Umzug</option>
+      <option value="other">أخرى — Sonstiges</option>
+    </select>
+  </Field>
             <Field label="رصيد محفظة DOS — Wallet-Guthaben">
               <input type="number" className={inputCls} style={inputStyle} value={form.wallet} onChange={(e) => set("wallet", Number(e.target.value))} />
             </Field>
