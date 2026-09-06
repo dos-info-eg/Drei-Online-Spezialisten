@@ -144,6 +144,30 @@ function mapWorkSessionRow(row) {
   return { id: row.id, employeeProfileId: row.employee_profile_id, workDate: row.work_date, startedAt: row.started_at, endedAt: row.ended_at, breakMinutes: Number(row.break_minutes) || 0, status: row.status || "offline", notes: row.notes || "" };
 }
 
+function mapStudySessionRow(row) {
+  return { id: row.id, studentProfileId: row.student_profile_id, startedAt: row.started_at, endedAt: row.ended_at, breakMinutes: Number(row.break_minutes) || 0, breakStartedAt: row.break_started_at, breakEndedAt: row.break_ended_at, status: row.status || "finished" };
+}
+
+function calculateStudyStats(session, timestamp = Date.now()) {
+  if (!session) return { studyMinutes: 0, breakMinutes: 0 };
+  const start = new Date(session.startedAt).getTime();
+  const end = session.endedAt ? new Date(session.endedAt).getTime() : timestamp;
+  let breakMs = Number(session.breakMinutes || 0) * 60000;
+  if (session.breakStartedAt) {
+    const breakStart = new Date(session.breakStartedAt).getTime();
+    if (session.status === "break" && !session.breakEndedAt) {
+      breakMs = Math.max(0, Math.min(timestamp, breakStart + 20 * 60000) - breakStart);
+    } else {
+      const breakEnd = session.breakEndedAt ? new Date(session.breakEndedAt).getTime() : breakStart + breakMs;
+      breakMs = Math.max(breakMs, Math.max(0, breakEnd - breakStart));
+    }
+  }
+  return {
+    studyMinutes: Math.max(0, Math.floor((end - start - breakMs) / 60000)),
+    breakMinutes: Math.max(0, Math.floor(breakMs / 60000)),
+  };
+}
+
 const LIBRARY_CATEGORIES = [
   { value: "course", label: "كتاب الكورس" },
   { value: "exercises", label: "كتاب التدريبات" },
@@ -166,7 +190,7 @@ const INSTRUCTOR_PAGES = [
 ];
 
 function mapLibraryRow(row) {
-  return { id: row.id, level: row.level, libraryType: row.library_type || "digital", category: row.category, title: row.title, url: row.url, storagePath: row.storage_path || "", visible: row.visible !== false, instructorProfileId: row.instructor_profile_id };
+  return { id: row.id, level: row.level, libraryType: row.library_type || "digital", category: row.category, title: row.title, url: row.url, storagePath: row.storage_path || "", visible: row.visible !== false, studentDownloadEnabled: row.student_download_enabled !== false, instructorProfileId: row.instructor_profile_id };
 }
 
 const REQUEST_TYPES = [
@@ -570,7 +594,7 @@ function LogoMark({ height = 34, withWordmark = true }) {
     <div className="flex items-center gap-2">
       <img
         src={LOGO_SRC}
-        alt="DOS Drei Online Spezialesten"
+        alt="DOS:Drei_Online_Spezialesten"
         style={{ height, width: "auto", objectFit: "contain" }}
       />
       {withWordmark && (
@@ -578,7 +602,7 @@ function LogoMark({ height = 34, withWordmark = true }) {
           className="hidden sm:inline text-xs md:text-sm font-semibold tracking-wide whitespace-nowrap"
           style={{ color: COLORS.goldSoft, fontFamily: F_BODY }}
         >
-          DOS Drei Online Spezialesten
+          DOS:Drei_Online_Spezialesten
         </span>
       )}
     </div>
@@ -972,9 +996,7 @@ function StudentFormModal({ initial, onSave, onClose, isNew, existingIds, instru
                 <option value="primary">ابتدائي — Grundschule</option>
                 <option value="preparatory">إعدادي — Mittlere Schule</option>
                 <option value="secondary">ثانوي — Oberschule</option>
-                <option value="univrtsity">طالب جامعي — Student</option>
                 <option value="graduate">خريج — Hochschulabschluss</option>
-                <option value="Institute">معهد — Institute</option>
                 <option value="diploma">دبلوم — Diplom</option>
               </select>
             </Field>
@@ -1237,6 +1259,7 @@ function FinancialPage({ students, showTotals, setShowTotals, incomingFunds, aca
   const matchesStudent = (item) => !query || (item.studentName || "").toLowerCase().includes(query) || students.some((student) => student.profileId === item.studentId && (student.id || "").toLowerCase().includes(query));
   const visibleIncoming = incomingFunds.filter(matchesStudent);
   const visibleExpenses = academyExpenses.filter(matchesStudent);
+  const paidIncomingByStudent = visibleIncoming.filter((item) => item.status === "paid" && item.studentId);
   const outstandingStudents = students
     .map((student) => ({ student, finance: computeStudentFinance(student) }))
     .filter(({ finance }) => finance.balance > 0)
@@ -1292,6 +1315,16 @@ function FinancialPage({ students, showTotals, setShowTotals, incomingFunds, aca
               </div>
             </div>
           )) : <p className="text-sm py-3" style={{ color: "#1E7A38" }}>لا توجد مستحقات غير مسددة حالياً.</p>)}
+        </div>
+        <div className="rounded-xl border p-4 mb-5" style={{ borderColor: COLORS.border, backgroundColor: "#F0FDF4" }}>
+          <div className="flex flex-wrap items-center justify-between gap-3 mb-3">
+            <div>
+              <h3 className="text-sm font-semibold" style={{ color: "#166534", fontFamily: F_BODY }}>مستحقات مسددة — Bezahlte Kursgebühren</h3>
+              <p className="text-xs mt-1" style={{ color: COLORS.subtle }}>إجمالي المدفوعات المسجلة لكل طالب</p>
+            </div>
+            <strong className="text-sm" style={{ color: "#166534", fontFamily: F_MONO }}>{students.reduce((sum, student) => sum + Math.max(computeStudentFinance(student).paid, 0), 0).toLocaleString()} {currencyLabel(students[0]?.financial?.currency || "EGP")}</strong>
+          </div>
+          <div className="space-y-2 max-h-64 overflow-y-auto">{students.filter((student) => computeStudentFinance(student).paid > 0).map((student) => { const payment = paidIncomingByStudent.filter((item) => item.studentId === student.profileId).sort((a, b) => String(b.receivedDate || b.date).localeCompare(String(a.receivedDate || a.date)))[0]; return <div key={student.profileId || student.id} className="flex flex-wrap items-center justify-between gap-2 border-t pt-2 text-xs" style={{ borderColor: COLORS.border }}><span style={{ color: COLORS.ink }}>{student.name} <span style={{ color: COLORS.subtle }}>({student.id})</span><small className="block" style={{ color: COLORS.subtle }}>آخر سداد: {payment?.receivedDate || payment?.date || "غير معروف"} · المستلم: {payment?.recipientName || "غير معروف"}</small></span><strong style={{ color: "#166534", fontFamily: F_MONO }}>{computeStudentFinance(student).paid.toLocaleString()} {currencyLabel(student.financial.currency)}</strong></div>; })}{students.every((student) => computeStudentFinance(student).paid <= 0) && <p className="text-sm py-3" style={{ color: COLORS.subtle }}>لا توجد مستحقات مسددة مسجلة.</p>}</div>
         </div>
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
           <FinancialEntryCard type="incoming" title="الأموال الواردة — Einnahmen" color="#1E7A38" items={visibleIncoming} form={incomingForm} setForm={setIncomingForm} students={students} showTotals={showTotals} formatTotals={formatTotals} onAdd={addEntry} onUpdate={updateEntry} onRemove={removeEntry} onCreateInvoice={onCreateInvoice} />
@@ -1359,7 +1392,7 @@ function AnimatedNumber({ value, duration = 1200, suffix = "", formatter = (n) =
 function AdminDashboard({
   students, instructors, adminAccounts, activityLog, profile,
   requests, refreshStudents, refreshInstructors, refreshAdmins, refreshLog, onUpdateRequest, onDeleteRequest,
-  addLog, onLogout, workSessions, onSaveWorkSession, onUpdateWorkSession, libraryBooks, refreshLibrary, onUpdateLibraryBook, onUpdateAccount,
+  addLog, onLogout, workSessions, onSaveWorkSession, onUpdateWorkSession, studySessions, libraryBooks, refreshLibrary, onUpdateLibraryBook, onUpdateAccount,
 }) {
   const [query, setQuery] = useState("");
   const [modal, setModal] = useState(null); // { mode: 'new'|'edit', data }
@@ -1367,7 +1400,7 @@ function AdminDashboard({
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [saving, setSaving] = useState(false);
   const [invoiceHtml, setInvoiceHtml] = useState(() => loadLS("invoiceHtml", null)); // uploaded invoice template (HTML string)
-  const VALID_VIEWS = ["dashboard", "requests", "financial", "invoice", "accounts", "work-hours", "library", "instructors", "log", "student", "students", "add-student"];
+  const VALID_VIEWS = ["dashboard", "requests", "study-report", "financial", "invoice", "accounts", "work-hours", "library", "instructors", "log", "student", "students", "add-student"];
   const isAdministrationRole = ["admin", "accountant", "staff"].includes(profile?.role);
   const isAccountantRestricted = profile?.role === "accountant";
   const isAdmin = profile?.role === "admin";
@@ -1852,7 +1885,7 @@ function AdminDashboard({
   async function addAdminLibraryBook(book) {
     let url = book.url.trim();
     let uploadedPath = "";
-    if (book.libraryType === "digital" && book.file) {
+    if (book.file) {
       if (book.file.size > 25 * 1024 * 1024) throw new Error("حجم الملف الرقمي يجب ألا يتجاوز 25 ميجابايت.");
       const safeName = book.file.name.replace(/[^a-zA-Z0-9._-]/g, "_");
       uploadedPath = `${profile.id}/${Date.now()}-${safeName}`;
@@ -1862,8 +1895,8 @@ function AdminDashboard({
       if (uploadError) throw new Error(`تعذر رفع الملف: ${uploadError.message}`);
       url = "";
     }
-    if (!url && book.libraryType === "paper") url = `paper://${encodeURIComponent(book.title.trim())}`;
-    const { error } = await supabaseClient.from("course_library").insert({ level: book.level, library_type: book.libraryType, category: book.category, title: book.title.trim(), url, storage_path: uploadedPath || null, visible: true, instructor_profile_id: profile.id });
+    if (!url && book.libraryType === "paper" && !uploadedPath) url = `paper://${encodeURIComponent(book.title.trim())}`;
+    const { error } = await supabaseClient.from("course_library").insert({ level: book.level, library_type: book.libraryType, category: book.category, title: book.title.trim(), url, storage_path: uploadedPath || null, visible: true, student_download_enabled: true, instructor_profile_id: profile.id });
     if (error) {
       if (uploadedPath) await supabaseClient.storage.from("course-library").remove([uploadedPath]);
       throw new Error(`تم رفع الملف لكن تعذر حفظ سجل المكتبة: ${error.message}`);
@@ -1955,6 +1988,13 @@ function AdminDashboard({
                   label="إدارة الطلاب — Studentenverwaltung"
                   color="#7C3AED"
                   onClick={() => goTo("students")}
+                />}
+
+                {isAdmin && <MenuItem
+                  icon={<Icon.history />}
+                  label="تقرير مذاكرة الطلاب — Lernbericht"
+                  color="#0F766E"
+                  onClick={() => goTo("study-report")}
                 />}
 
                 <MenuItem
@@ -2066,6 +2106,18 @@ function AdminDashboard({
           onCreateInvoice={createStudentInvoice}
           onBack={() => goTo("dashboard")}
         />
+      )}
+      {adminView === "study-report" && isAdmin && (
+        <div className="max-w-6xl mx-auto px-5 md:px-8 py-8">
+          <button type="button" onClick={() => goTo("dashboard")} className="flex items-center gap-1.5 text-sm font-semibold mb-5" style={{ color: COLORS.navy }}>
+            <Icon.back /> رجوع إلى الرئيسية — Zurück
+          </button>
+          <div className="mb-5">
+            <h1 className="text-2xl md:text-3xl font-semibold" style={{ color: COLORS.ink, fontFamily: F_DISPLAY }}>تقرير مذاكرة الطلاب · Lernbericht</h1>
+            <p className="text-sm mt-1" style={{ color: COLORS.subtle }}>الحالات اللحظية، عدادات الوقت، تفاصيل الجلسات، وتنزيل التقارير.</p>
+          </div>
+          <StudyReportCard students={students} studySessions={studySessions} />
+        </div>
       )}
       {employeeHasPermission(profile, "view_activity_log") && adminView === "log" && <ActivityLogPage activityLog={activityLog} onBack={() => goTo("dashboard")} />}
       {adminView === "student" && selectedStudent && (
@@ -2265,7 +2317,6 @@ function AdminDashboard({
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4 mb-7">
-            <StatCard label="مستحقات مسددة" sub="Bezahlte Kursgebühren" value={showDashboardStats && showPaidTotal ? <><AnimatedNumber value={totalPaid} formatter={(n) => n.toLocaleString()} /> <span className="text-base"> {currencyLabel(students[0]?.financial?.currency || "EGP")}</span></> : "••••••"} accent="#1E7A38" action={<button type="button" onClick={() => { setShowPaidTotal((visible) => !visible); setShowDashboardStats(true); }} className="p-1 rounded hover:bg-gray-100" style={{ color: COLORS.subtle }} title={showPaidTotal ? "إخفاء المستحقات المسددة" : "إظهار المستحقات المسددة"}><Icon.eye /></button>} />
             <StatCard label="مستحقات غير مسددة" sub="Ausstehende Zahlungen" value={showDashboardStats ? <><AnimatedNumber value={totalDue} formatter={(n) => n.toLocaleString()} /> <span className="text-base"> {currencyLabel(students[0]?.financial?.currency || "EGP")}</span></> : "••••••"} accent={COLORS.red} action={<button type="button" onClick={() => setShowDashboardStats((visible) => !visible)} className="p-1 rounded hover:bg-gray-100" style={{ color: COLORS.subtle }} title="إظهار أو إخفاء القيمة"><Icon.eye /></button>} />
             <StatCard label="طلاب نشطون" sub="Aktive Studierende" value={showDashboardStats ? <AnimatedNumber value={activeCount} formatter={(n) => n.toLocaleString()} /> : "••••"} accent="#1E7A38" action={<button type="button" onClick={() => setShowDashboardStats((visible) => !visible)} className="p-1 rounded hover:bg-gray-100" style={{ color: COLORS.subtle }} title="إظهار أو إخفاء القيمة"><Icon.eye /></button>} />
             <StatCard label="إجمالي الطلاب" sub="Studierende gesamt" value={showDashboardStats ? <AnimatedNumber value={students.length} formatter={(n) => n.toLocaleString()} /> : "••••"} accent={COLORS.navy} action={<button type="button" onClick={() => setShowDashboardStats((visible) => !visible)} className="p-1 rounded hover:bg-gray-100" style={{ color: COLORS.subtle }} title="إظهار أو إخفاء القيمة"><Icon.eye /></button>} />
@@ -2665,6 +2716,7 @@ function InstructorsPage({ instructors, students, refreshInstructors, addLog, on
   const emptyForm = { username: "", password: "", name: "", nameAr: "", subject: "", phone: "", joinDate: "", salaryTotal: "", salaryPaid: "", paymentDate: "", salaryTotalSinceStart: "", otherPaymentName: "", otherPaymentAmount: "", otherPaymentDetails: "", nextPaymentDate: "", nextPaymentInfo: "", penalties: "", absences: "" };
   const [form, setForm] = useState(emptyForm);
   const [editingInstructor, setEditingInstructor] = useState(null);
+  const [deleteTarget, setDeleteTarget] = useState(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
 
@@ -2778,12 +2830,20 @@ function InstructorsPage({ instructors, students, refreshInstructors, addLog, on
     setError("");
   }
 
-  async function removeInstructor(ins) {
+  function requestInstructorDeletion(ins) {
+    setDeleteTarget(ins);
+  }
+
+  async function removeInstructor() {
+    const ins = deleteTarget;
+    if (!ins) return;
     try {
       await callManageUsers({ action: "delete_user", profile_id: ins.profileId, username: ins.id });
       await refreshInstructors();
     } catch (e) {
       setError(e.message || "تعذّر حذف حساب المحاضر.");
+    } finally {
+      setDeleteTarget(null);
     }
   }
 
@@ -2828,7 +2888,7 @@ function InstructorsPage({ instructors, students, refreshInstructors, addLog, on
                   <button onClick={() => editInstructor(ins)} className="p-1.5 rounded-lg hover:bg-gray-100" style={{ color: COLORS.navy }} title="تعديل الحساب">
                     <Icon.edit />
                   </button>
-                  <button onClick={() => removeInstructor(ins)} className="p-1.5 rounded-lg hover:bg-gray-100" style={{ color: COLORS.red }} title="حذف الحساب">
+                  <button onClick={() => requestInstructorDeletion(ins)} className="p-1.5 rounded-lg hover:bg-gray-100" style={{ color: COLORS.red }} title="حذف الحساب">
                     <Icon.trash />
                   </button>
                 </div>
@@ -2924,6 +2984,7 @@ function InstructorsPage({ instructors, students, refreshInstructors, addLog, on
           </form>
         </div>
       </div>
+      {deleteTarget && <ConfirmDialog title="تأكيد حذف المحاضر" message={`سيتم حذف حساب المحاضر ${deleteTarget.name || deleteTarget.id} نهائيًا، ولا يمكن التراجع عن هذا الإجراء.`} onConfirm={removeInstructor} onClose={() => setDeleteTarget(null)} />}
     </div>
   );
 }
@@ -3122,17 +3183,17 @@ const BUNDLED_DIGITAL_COURSES = [
 ];
 
 function LibraryFileViewer({ book, onClose }) {
-  const viewerUrl = /\.pdf($|[?#])/i.test(book.url || "") ? `${book.url}${book.url.includes("#") ? "&" : "#"}toolbar=0&navpanes=0&scrollbar=1` : book.url;
-  return <div className="fixed inset-0 z-[90] flex items-center justify-center p-3 md:p-6" style={{ backgroundColor: "rgba(8,21,39,.86)" }} onContextMenu={(event) => event.preventDefault()}><div className="flex h-[92vh] w-full max-w-6xl flex-col overflow-hidden rounded-2xl border bg-white shadow-2xl" style={{ borderColor: COLORS.border }}><div className="flex items-center justify-between gap-3 border-b px-4 py-3" style={{ borderColor: COLORS.border }}><div><p className="text-sm font-semibold" style={{ color: COLORS.ink }}>{book.title}</p><p className="text-xs" style={{ color: COLORS.subtle }}>المحتوى متاح للعرض داخل بوابة DOS فقط</p></div><button type="button" onClick={onClose} className="rounded-lg border px-3 py-1.5 text-sm font-semibold" style={{ borderColor: COLORS.border, color: COLORS.red }}>إغلاق</button></div><iframe title={book.title} src={viewerUrl} sandbox="allow-scripts allow-forms allow-modals" referrerPolicy="no-referrer" className="min-h-0 flex-1 border-0" /></div></div>;
+  return <div className="fixed inset-0 z-[90] flex items-center justify-center p-3 md:p-6" style={{ backgroundColor: "rgba(8,21,39,.78)" }}><div className="flex h-[92vh] w-full max-w-6xl flex-col overflow-hidden rounded-2xl border bg-white shadow-2xl" style={{ borderColor: COLORS.border }}><div className="flex items-center justify-between gap-3 border-b px-4 py-3" style={{ borderColor: COLORS.border }}><div><p className="text-sm font-semibold" style={{ color: COLORS.ink }}>{book.title}</p><p className="text-xs" style={{ color: COLORS.subtle }}>معاينة درس HTML داخل بوابة DOS</p></div><button type="button" onClick={onClose} className="rounded-lg border px-3 py-1.5 text-sm font-semibold" style={{ borderColor: COLORS.border, color: COLORS.red }}>إغلاق</button></div><iframe title={book.title} src={book.url} sandbox="allow-scripts allow-forms allow-popups allow-modals" referrerPolicy="no-referrer" className="min-h-0 flex-1 border-0" /></div></div>;
 }
 
 /*
-function LibraryPage({ books, initialLevel, editable, onAdd, onDelete, onUpdate, dictionariesOnly = false }) {
+function LibraryPage({ books, initialLevel, editable, onAdd, onDelete, onUpdate, dictionariesOnly = false, studentMode = false }) {
   const [level, setLevel] = useState(initialLevel || LEVELS[0]);
   const [libraryType, setLibraryType] = useState("digital");
   const [form, setForm] = useState({ category: "course", title: "", url: "", file: null });
   const [editingId, setEditingId] = useState(null);
   const [editForm, setEditForm] = useState({ title: "", url: "", category: "course" });
+  const [viewerBook, setViewerBook] = useState(null);
   const [libraryMessage, setLibraryMessage] = useState("");
   const [viewerBook, setViewerBook] = useState(null);
   const visibleBooks = books.filter((book) => book.level === level && book.visible !== false && book.libraryType === libraryType && (!dictionariesOnly || book.category === "dictionary"));
@@ -3164,13 +3225,13 @@ function LibraryPage({ books, initialLevel, editable, onAdd, onDelete, onUpdate,
 }
 */
 
-function LibraryPage({ books, initialLevel, editable, onAdd, onDelete, onUpdate, dictionariesOnly = false }) {
+function LibraryPage({ books, initialLevel, editable, onAdd, onDelete, onUpdate, dictionariesOnly = false, studentMode = false }) {
   const [level, setLevel] = useState(initialLevel || LEVELS[0]);
   const [libraryType, setLibraryType] = useState("digital");
   const [form, setForm] = useState({ category: dictionariesOnly ? "dictionary" : "course", title: "", url: "", file: null });
   const [message, setMessage] = useState("");
   const [editingId, setEditingId] = useState(null);
-  const [editForm, setEditForm] = useState({ title: "", url: "", category: "course" });
+  const [editForm, setEditForm] = useState({ title: "", url: "", category: "course", studentDownloadEnabled: true });
   const [viewerBook, setViewerBook] = useState(null);
 
   const visibleBooks = books.filter((book) => book.level === level && book.libraryType === libraryType && book.visible !== false && (!dictionariesOnly || book.category === "dictionary"));
@@ -3196,25 +3257,26 @@ function LibraryPage({ books, initialLevel, editable, onAdd, onDelete, onUpdate,
 
   function beginEdit(book) {
     setEditingId(book.id);
-    setEditForm({ title: book.title || "", url: book.url || "", category: book.category || "course" });
+    setEditForm({ title: book.title || "", url: book.url || "", category: book.category || "course", studentDownloadEnabled: book.studentDownloadEnabled !== false });
   }
 
   function renderBook(book) {
     const link = book.url || "#";
-    const isPaper = link.startsWith("paper://");
+    const isPaper = book.libraryType === "paper";
     return (
       <div key={book.id} className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b py-2" style={{ borderColor: COLORS.border }}>
         {editingId === book.id ? (
           <div className="grid flex-1 grid-cols-1 gap-2 sm:grid-cols-2">
             <input className={inputCls} style={inputStyle} value={editForm.title} onChange={(event) => setEditForm({ ...editForm, title: event.target.value })} />
             <input className={inputCls} style={inputStyle} value={editForm.url} onChange={(event) => setEditForm({ ...editForm, url: event.target.value })} />
-            <button type="button" onClick={() => { onUpdate(book.id, editForm); setEditingId(null); }} className="rounded-lg px-3 py-2 text-xs font-semibold" style={{ backgroundColor: COLORS.navy, color: "#fff" }}>حفظ</button>
+            {book.libraryType === "paper" && <label className="flex items-center gap-2 text-xs" style={{ color: COLORS.subtle }}><input type="checkbox" checked={editForm.studentDownloadEnabled} onChange={(event) => setEditForm({ ...editForm, studentDownloadEnabled: event.target.checked })} /> السماح للطالب بالتنزيل</label>}
+            <button type="button" onClick={() => { onUpdate(book.id, { title: editForm.title, url: editForm.url, category: editForm.category, student_download_enabled: editForm.studentDownloadEnabled }); setEditingId(null); }} className="rounded-lg px-3 py-2 text-xs font-semibold" style={{ backgroundColor: COLORS.navy, color: "#fff" }}>حفظ</button>
             <button type="button" onClick={() => setEditingId(null)} className="rounded-lg border px-3 py-2 text-xs" style={{ borderColor: COLORS.border, color: COLORS.subtle }}>إلغاء</button>
           </div>
         ) : (
           <div className="flex min-w-0 flex-1 items-center gap-2">
-            {isPaper ? <span className="text-sm font-semibold" style={{ color: COLORS.ink }}>{book.title}</span> : <button type="button" onClick={() => setViewerBook(book)} className="truncate text-right text-sm font-semibold underline" style={{ color: COLORS.navy }}>{book.title}</button>}
-            <span className="text-[11px]" style={{ color: COLORS.subtle }}>{isPaper ? "ورقي" : "عرض داخلي"}</span>
+            {isPaper ? (studentMode && book.studentDownloadEnabled === false ? <span className="text-sm font-semibold" style={{ color: COLORS.ink }}>{book.title}</span> : <a href={link === "#" ? undefined : link} download={studentMode ? true : undefined} target="_blank" rel="noreferrer" className="truncate text-sm font-semibold underline" style={{ color: COLORS.navy }}>{book.title}</a>) : <button type="button" onClick={() => setViewerBook(book)} className="truncate text-right text-sm font-semibold underline" style={{ color: COLORS.navy }}>{book.title}</button>}
+            <span className="text-[11px]" style={{ color: COLORS.subtle }}>{isPaper ? (book.studentDownloadEnabled === false ? "التنزيل غير مسموح" : "تنزيل ورقي") : "فتح داخل الموقع"}</span>
           </div>
         )}
         {editable && editingId !== book.id && (
@@ -3243,7 +3305,7 @@ function LibraryPage({ books, initialLevel, editable, onAdd, onDelete, onUpdate,
         <label className="flex cursor-pointer items-center justify-center rounded-lg border px-3 py-2 text-sm sm:col-span-3" style={{ borderColor: COLORS.border, color: COLORS.navy }}><input type="file" accept=".pdf,.epub,.html,.mp3,.wav,.m4a,.mp4,image/*" className="hidden" onChange={(event) => setForm({ ...form, file: event.target.files?.[0] || null })} />{form.file ? `تم اختيار: ${form.file.name}` : "رفع ملف من الجهاز"}</label>
         <button type="submit" className="rounded-lg px-4 py-2 text-sm font-semibold sm:col-span-3" style={{ backgroundColor: COLORS.navy, color: "#fff" }}>إضافة المادة</button>
       </form>}
-      {bundledCourses.length > 0 && <div className="mb-4 grid grid-cols-1 gap-2 md:grid-cols-2">{bundledCourses.map((course) => <button type="button" key={course.url} onClick={() => setViewerBook({ ...course, libraryType: "digital", category: "course" })} className="rounded-lg border p-3 text-right" style={{ borderColor: COLORS.border, color: COLORS.navy }}><span className="block text-sm font-semibold">{course.title}</span><span className="mt-1 block text-xs" style={{ color: COLORS.subtle }}>{course.description}</span></button>)}</div>}
+      {bundledCourses.length > 0 && <div className="mb-4 grid grid-cols-1 gap-2 md:grid-cols-2">{bundledCourses.map((course) => <button key={course.url} type="button" onClick={() => setViewerBook({ ...course, libraryType: "digital" })} className="rounded-lg border p-3 text-right" style={{ borderColor: COLORS.border, color: COLORS.navy }}><span className="block text-sm font-semibold">{course.title}</span><span className="mt-1 block text-xs" style={{ color: COLORS.subtle }}>{course.description}</span></button>)}</div>}
       <div className="space-y-2">{displayBooks.length ? displayBooks.map(renderBook) : <p className="text-sm" style={{ color: COLORS.subtle }}>لا توجد مواد مضافة لهذا المستوى بعد.</p>}</div>
       {viewerBook && <LibraryFileViewer book={viewerBook} onClose={() => setViewerBook(null)} />}
     </InfoCard>
@@ -3294,6 +3356,43 @@ function downloadAttendanceReport(students, attendance, student) {
   link.download = student ? `attendance-${student.id}.csv` : "attendance-all-students.csv";
   link.click();
   URL.revokeObjectURL(link.href);
+}
+
+function downloadStudyReport(students, studySessions) {
+  const escapeCsv = (value) => `"${String(value ?? "").replace(/"/g, '""')}"`;
+  const lines = [["Student", "Code", "Start", "Ende", "Status", "Lernminuten", "Pause (Minuten)"]];
+  (studySessions || []).forEach((session) => {
+    const student = (students || []).find((item) => item.profileId === session.studentProfileId);
+    const stats = calculateStudyStats(session);
+    lines.push([student?.name || session.studentProfileId, student?.id || "", session.startedAt, session.endedAt || "", session.status, stats.studyMinutes, stats.breakMinutes]);
+  });
+  const blob = new Blob(["\ufeff" + lines.map((line) => line.map(escapeCsv).join(",")).join("\r\n")], { type: "text/csv;charset=utf-8" });
+  const link = document.createElement("a");
+  link.href = URL.createObjectURL(blob);
+  link.download = "student-study-report.csv";
+  link.click();
+  URL.revokeObjectURL(link.href);
+}
+
+function StudyReportCard({ students, studySessions }) {
+  const [openStudentId, setOpenStudentId] = useState(null);
+  const totalMinutes = (studySessions || []).reduce((total, session) => {
+    return total + calculateStudyStats(session).studyMinutes;
+  }, 0);
+  const activeSessions = (studySessions || []).filter((session) => session.status === "studying" || session.status === "break");
+  const studentSummaries = (students || []).map((student) => {
+    const studentSessions = (studySessions || []).filter((session) => session.studentProfileId === student.profileId);
+    const latest = studentSessions[0];
+    const totals = studentSessions.reduce((total, session) => {
+      const stats = calculateStudyStats(session);
+      return { minutes: total.minutes + stats.studyMinutes, breaks: total.breaks + stats.breakMinutes };
+    }, { minutes: 0, breaks: 0 });
+    return { student, latest, minutes: totals.minutes, breaks: totals.breaks };
+  }).filter((summary) => summary.latest || summary.minutes > 0);
+  return <div className="rounded-2xl border p-5 mb-5" style={{ borderColor: COLORS.border, backgroundColor: COLORS.panel }}>
+    <div className="flex flex-wrap items-center justify-between gap-3"><div><h2 className="text-base font-semibold" style={{ color: COLORS.ink, fontFamily: F_DISPLAY }}>تقرير مذاكرة الطلاب · Lernbericht</h2><p className="text-xs mt-1" style={{ color: COLORS.subtle }}>{studySessions?.length || 0} جلسة · {activeSessions.length} نشطة · {Math.floor(totalMinutes / 60)} ساعة و {totalMinutes % 60} دقيقة</p></div><button type="button" onClick={() => downloadStudyReport(students, studySessions)} className="rounded-lg px-3 py-2 text-xs font-semibold" style={{ backgroundColor: COLORS.navy, color: "#fff" }}>سحب ملف منسق · CSV herunterladen</button></div>
+    {studentSummaries.length > 0 && <div className="mt-4 space-y-2">{studentSummaries.map(({ student, latest, minutes, breaks }) => { const isOpen = openStudentId === student.profileId; const studentSessions = (studySessions || []).filter((session) => session.studentProfileId === student.profileId); return <div key={student.profileId} className="rounded-xl border px-3 py-2 text-xs" style={{ borderColor: COLORS.border, backgroundColor: "#F8FAFD" }}><div className="flex flex-wrap items-center justify-between gap-2"><span className="font-semibold" style={{ color: COLORS.ink }}>{student.name} · {student.id}</span><span style={{ color: latest?.status === "break" ? COLORS.goldDark : latest?.status === "studying" ? "#1E7A38" : COLORS.subtle }}>{latest?.status === "break" ? "Pause" : latest?.status === "studying" ? "Lernen" : "Beendet"}</span><span style={{ color: COLORS.subtle }}>المذاكرة: {Math.floor(minutes / 60)} س {minutes % 60} د · الراحة: {breaks} د</span><div className="flex items-center gap-2"><button type="button" onClick={() => setOpenStudentId(isOpen ? null : student.profileId)} className="rounded-lg border px-2 py-1 font-semibold" style={{ borderColor: COLORS.border, color: COLORS.navy }}>{isOpen ? "إغلاق" : "فتح الجلسات"}</button><button type="button" onClick={() => downloadStudyReport([student], studentSessions)} className="rounded-lg px-2 py-1 font-semibold" style={{ backgroundColor: COLORS.navy, color: "#fff" }}>تنزيل</button></div></div>{isOpen && <div className="mt-3 space-y-1 border-t pt-2" style={{ borderColor: COLORS.border }}>{studentSessions.map((session) => { const stats = calculateStudyStats(session); return <div key={session.id} className="flex flex-wrap justify-between gap-2" style={{ color: COLORS.subtle }}><span>{new Date(session.startedAt).toLocaleString("ar-EG", { hour12: false })}</span><span>{session.status === "studying" ? "Lernen" : session.status === "break" ? "Pause" : "Beendet"}</span><span>مذاكرة {stats.studyMinutes} د · راحة {stats.breakMinutes} د</span></div>; })}</div>}</div>; })}</div>}
+  </div>;
 }
 
 function WalletCard({ student }) {
@@ -3469,7 +3568,7 @@ function ElectronicLibraryPage({ student, books, request, onSubmitPayment }) {
 
   if (!unlocked) return <div className="rounded-2xl border p-6 text-center" style={{ borderColor: COLORS.border, backgroundColor: COLORS.panel }}><img src={LOGO_SRC} alt="DOS Akademie" className="mx-auto mb-4 h-14 w-auto object-contain" /><h1 className="text-2xl font-semibold" style={{ color: COLORS.navy, fontFamily: F_DISPLAY }}>Willkommen in der DOS Bibliothek</h1><p className="mt-2 text-sm" style={{ color: COLORS.subtle }}>أدخل كلمة مرور المكتبة التي أرسلتها الإدارة.</p><form onSubmit={(event) => { event.preventDefault(); if (password === student.libraryAccessPassword) setUnlocked(true); else setMessage("كلمة المرور غير صحيحة."); }} className="mx-auto mt-5 flex max-w-sm gap-2"><input type="password" required className={inputCls} style={inputStyle} value={password} onChange={(event) => setPassword(event.target.value)} placeholder="كلمة المرور" /><button className="rounded-lg px-4 text-sm font-semibold" style={{ backgroundColor: COLORS.navy, color: "#fff" }}>فتح</button></form>{message && <p className="mt-3 text-xs" style={{ color: COLORS.red }}>{message}</p>}</div>;
 
-  return <div className="space-y-5"><div className="relative overflow-hidden rounded-[28px] border p-6 md:p-9" style={{ borderColor: COLORS.gold, background: `linear-gradient(120deg, ${COLORS.navyDeep}, ${COLORS.navyMid})`, color: "#fff" }}><img src={LOGO_SRC} alt="DOS Akademie" className="relative z-10 h-14 w-auto object-contain" /><p className="relative z-10 mt-5 text-xs uppercase tracking-[0.2em]" style={{ color: COLORS.goldSoft }}>Deutsche Sprache · Lesen · Hören · Lernen</p><h1 className="relative z-10 mt-2 text-2xl md:text-4xl font-semibold" style={{ fontFamily: F_DISPLAY }}>Willkommen in der DOS Bibliothek</h1><p className="relative z-10 mt-2 text-sm" style={{ color: "#D9E3F0" }}>اختر المستوى وابدأ رحلة القراءة والاستماع بالألمانية.</p></div><LibraryPage books={books} initialLevel={student.level} /></div>;
+  return <div className="space-y-5"><div className="relative overflow-hidden rounded-[28px] border p-6 md:p-9" style={{ borderColor: COLORS.gold, background: `linear-gradient(120deg, ${COLORS.navyDeep}, ${COLORS.navyMid})`, color: "#fff" }}><img src={LOGO_SRC} alt="DOS Akademie" className="relative z-10 h-14 w-auto object-contain" /><p className="relative z-10 mt-5 text-xs uppercase tracking-[0.2em]" style={{ color: COLORS.goldSoft }}>Deutsche Sprache · Lesen · Hören · Lernen</p><h1 className="relative z-10 mt-2 text-2xl md:text-4xl font-semibold" style={{ fontFamily: F_DISPLAY }}>Willkommen in der DOS Bibliothek</h1><p className="relative z-10 mt-2 text-sm" style={{ color: "#D9E3F0" }}>اختر المستوى وابدأ رحلة القراءة والاستماع بالألمانية.</p></div><LibraryPage books={books} initialLevel={student.level} studentMode /></div>;
 }
 
 function RequestInbox({ requests, onUpdate, onDelete, readOnly = false }) {
@@ -3568,7 +3667,145 @@ function AttendanceSummary({ records, studentLevel, editable, onSave, onDelete, 
   );
 }
 
-function StudentPortal({ student, attendance, libraryBooks, requests, onSubmitRequest, onDeleteRequest, onLogout }) {
+function StudentStudyPanel({ student, sessions, onSaveSession }) {
+  const [activeSession, setActiveSession] = useState(null);
+  const [now, setNow] = useState(Date.now());
+  const [message, setMessage] = useState("");
+  const [finishedSummary, setFinishedSummary] = useState(null);
+  const notifiedHourRef = useRef(0);
+  const notifiedTwentyRef = useRef(0);
+  const breakCompletionRef = useRef("");
+
+  const encouragements = [
+    "Du machst das sehr gut. Bleib konzentriert und lerne weiter.",
+    "Dein Einsatz zählt. Bleib dran und mach weiter so.",
+    "Sehr gut gemacht. Du kommst deinem Lernziel Schritt für Schritt näher.",
+    "Bleib ruhig, fokussiert und konsequent. Du schaffst das.",
+  ];
+
+  function speakGerman(text, rate = 0.86, pitch = 1) {
+    if (!window.speechSynthesis) return;
+    window.speechSynthesis.cancel();
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.lang = "de-DE";
+    utterance.rate = rate;
+    utterance.pitch = pitch;
+    utterance.volume = 1;
+    window.speechSynthesis.speak(utterance);
+  }
+
+  function getStats(session, timestamp = Date.now()) {
+    return calculateStudyStats(session, timestamp);
+  }
+
+  useEffect(() => {
+    const current = (sessions || []).find((item) => item.status === "studying" || item.status === "break");
+    setActiveSession(current || null);
+  }, [sessions]);
+
+  useEffect(() => {
+    if (!activeSession) return undefined;
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [activeSession]);
+
+  useEffect(() => {
+    notifiedHourRef.current = 0;
+    notifiedTwentyRef.current = 0;
+    if (!activeSession || activeSession.status !== "studying") return undefined;
+    const started = new Date(activeSession.startedAt).getTime();
+    const timer = window.setInterval(() => {
+      const elapsedMinutes = getStats(activeSession, Date.now()).studyMinutes;
+      const completedTwentyMinutes = Math.floor(elapsedMinutes / 20);
+      if (completedTwentyMinutes > 0 && completedTwentyMinutes > notifiedTwentyRef.current) {
+        notifiedTwentyRef.current = completedTwentyMinutes;
+        const notice = encouragements[(completedTwentyMinutes - 1) % encouragements.length];
+        playBellTone();
+        setMessage(`Deutsch: ${notice}`);
+        speakGerman(notice, 0.86, 1.02);
+      }
+      const completedHours = Math.floor(elapsedMinutes / 60);
+      if (completedHours > 0 && completedHours > notifiedHourRef.current) {
+        notifiedHourRef.current = completedHours;
+        const notice = "Eine Stunde Lernzeit ist vorbei. Bitte machen Sie jetzt eine Pause von 20 Minuten.";
+        playBellTone();
+        setMessage(`Deutsch: ${notice}`);
+        speakGerman(notice, 0.82, 0.98);
+        if ("Notification" in window && Notification.permission === "granted") new Notification("DOS Lernhinweis", { body: notice });
+      }
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, [activeSession]);
+
+  useEffect(() => {
+    if (!activeSession || activeSession.status !== "break" || !activeSession.breakStartedAt) return undefined;
+    const started = new Date(activeSession.breakStartedAt).getTime();
+    const timer = window.setInterval(() => {
+      const remaining = Math.max(0, 20 * 60 - Math.floor((Date.now() - started) / 1000));
+      if (remaining === 0 && breakCompletionRef.current !== activeSession.id) {
+        breakCompletionRef.current = activeSession.id;
+        const notice = "Die Pause ist jetzt vorbei. Zurück an die Arbeit. Beginnen Sie wieder mit dem Lernen.";
+        setMessage(`Deutsch: ${notice}`);
+        playBellTone();
+        speakGerman(notice, 0.72, 0.94);
+        if ("Notification" in window && Notification.permission === "granted") new Notification("DOS Lernhinweis", { body: notice });
+        onSaveSession({ id: activeSession.id, status: "studying", break_ended_at: new Date().toISOString(), break_minutes: 20 }).catch((error) => setMessage(error.message));
+        window.clearInterval(timer);
+      }
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, [activeSession, onSaveSession]);
+
+  const stats = activeSession ? getStats(activeSession, now) : { studyMinutes: 0, breakMinutes: 0 };
+  const elapsedLabel = `${Math.floor(stats.studyMinutes / 60)}:${String(stats.studyMinutes % 60).padStart(2, "0")}`;
+  const pauseRemaining = activeSession?.status === "break" && activeSession.breakStartedAt ? Math.max(0, 20 * 60 - Math.floor((now - new Date(activeSession.breakStartedAt).getTime()) / 1000)) : 0;
+  const pauseLabel = `${String(Math.floor(pauseRemaining / 60)).padStart(2, "0")}:${String(pauseRemaining % 60).padStart(2, "0")}`;
+  async function startStudy() {
+    setMessage("");
+    if ("Notification" in window && Notification.permission === "default") Notification.requestPermission().catch(() => {});
+    try {
+      await onSaveSession({ student_profile_id: student.profileId, started_at: new Date().toISOString(), status: "studying", break_minutes: 0 });
+    } catch (error) { setMessage(error.message); }
+  }
+  async function startBreak() {
+    if (!activeSession) return;
+    try {
+      await onSaveSession({ id: activeSession.id, status: "break", break_minutes: 20, break_started_at: new Date().toISOString() });
+      const notice = "Ihre 20-minütige Pause beginnt jetzt. Erholen Sie sich gut.";
+      setMessage(`Deutsch: ${notice}`);
+      speakGerman(notice, 0.84, 1);
+    } catch (error) { setMessage(error.message); }
+  }
+  async function finishStudy() {
+    if (!activeSession) return;
+    try {
+      const endedAt = new Date().toISOString();
+      const summary = getStats({ ...activeSession, endedAt, status: "finished" }, Date.now());
+      await onSaveSession({ id: activeSession.id, status: "finished", ended_at: endedAt });
+      setFinishedSummary(summary);
+      const notice = "Großartige Leistung! Sie haben heute konzentriert gelernt. Seien Sie stolz auf Ihren Einsatz und machen Sie weiter so.";
+      setMessage(`Deutsch: ${notice}`);
+      speakGerman(notice, 0.82, 1.04);
+    } catch (error) { setMessage(error.message); }
+  }
+
+  return <InfoCard labelAr="حالة المذاكرة" labelDe="Lernstatus">
+    <div className="flex flex-wrap items-center gap-2 mb-3">
+      <Badge tone={activeSession?.status === "studying" ? "green" : activeSession?.status === "break" ? "gold" : "navy"}>{activeSession ? (activeSession.status === "break" ? "Pause" : "Lernen") : "Bereit"}</Badge>
+      {activeSession && <span className="text-sm font-semibold" style={{ color: COLORS.ink }}>{elapsedLabel} Stunden/Minuten</span>}
+      {activeSession?.status === "break" && <span className="text-sm font-semibold" style={{ color: COLORS.goldDark }}>Pause: {pauseLabel}</span>}
+    </div>
+    <div className="flex flex-wrap gap-2">
+      {!activeSession && <button type="button" onClick={startStudy} className="rounded-lg px-3 py-2 text-sm font-semibold" style={{ backgroundColor: COLORS.navy, color: "#fff" }}>بدء المذاكرة · Lernen starten</button>}
+      {activeSession?.status === "studying" && <button type="button" onClick={startBreak} className="rounded-lg px-3 py-2 text-sm font-semibold" style={{ backgroundColor: COLORS.gold, color: COLORS.navyDeep }}>بريك 20 دقيقة · 20-Minuten-Pause</button>}
+      {activeSession && <button type="button" onClick={finishStudy} className="rounded-lg px-3 py-2 text-sm font-semibold" style={{ backgroundColor: COLORS.red, color: "#fff" }}>إنهاء المذاكرة · Lernen beenden</button>}
+    </div>
+    {message && <p className="mt-3 text-xs" style={{ color: COLORS.subtle }}>{message}</p>}
+    {finishedSummary && <div className="mt-4 rounded-xl border p-4" style={{ borderColor: COLORS.gold, backgroundColor: "#FFFBEB" }}><h3 className="text-sm font-semibold" style={{ color: COLORS.navy }}>ملخص الجلسة — Lernbericht</h3><div className="mt-2 grid grid-cols-1 sm:grid-cols-3 gap-2 text-xs" style={{ color: COLORS.ink }}><span>المذاكرة: <strong>{Math.floor(finishedSummary.studyMinutes / 60)} س و {finishedSummary.studyMinutes % 60} د</strong></span><span>الراحة: <strong>{finishedSummary.breakMinutes} دقيقة</strong></span><span>الحالة: <strong>انتهت — Beendet</strong></span></div></div>}
+  </InfoCard>;
+}
+
+function StudentPortal({ student, attendance, libraryBooks, requests, studySessions, onSaveStudySession, onSubmitRequest, onDeleteRequest, onLogout }) {
   const [dir, setDir] = useState("rtl");
   const studentPageKey = `studentPortalPage_${student.profileId || student.id}`;
   const savedStudentPage = loadLS(studentPageKey, "home");
@@ -3651,6 +3888,7 @@ function StudentPortal({ student, attendance, libraryBooks, requests, onSubmitRe
 
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
           <WalletCard student={student} />
+          <StudentStudyPanel student={student} sessions={studySessions} onSaveSession={onSaveStudySession} />
         </div>
 
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 mb-4">
@@ -3939,8 +4177,8 @@ function InstructorPortal({ profile, instructor, students, attendance, libraryBo
       if (uploadError) throw new Error(`تعذر رفع الملف: ${uploadError.message}`);
       url = "";
     }
-    if (!url && book.libraryType === "paper") url = `paper://${encodeURIComponent(book.title.trim())}`;
-    const { error } = await supabaseClient.from("course_library").insert({ level: book.level, library_type: book.libraryType, category: book.category, title: book.title.trim(), url, storage_path: uploadedPath || null, visible: true, instructor_profile_id: profile.id });
+    if (!url && book.libraryType === "paper" && !uploadedPath) url = `paper://${encodeURIComponent(book.title.trim())}`;
+    const { error } = await supabaseClient.from("course_library").insert({ level: book.level, library_type: book.libraryType, category: book.category, title: book.title.trim(), url, storage_path: uploadedPath || null, visible: true, student_download_enabled: true, instructor_profile_id: profile.id });
     if (error) {
       if (uploadedPath) await supabaseClient.storage.from("course-library").remove([uploadedPath]);
       throw new Error(`تم رفع الملف لكن تعذر حفظه في المكتبة: ${error.message}`);
@@ -4124,23 +4362,6 @@ function InstructorStudentCard({ student, saving, onSaveGrades, onSaveStudentDat
 function App() {
   useAcademyFonts();
 
-  useEffect(() => {
-    const blockContextMenu = (event) => event.preventDefault();
-    const blockShortcuts = (event) => {
-      const key = String(event.key || "").toLowerCase();
-      const blocked = event.key === "F12" ||
-        (event.ctrlKey && ["s", "u", "p"].includes(key)) ||
-        (event.ctrlKey && event.shiftKey && ["i", "j", "c"].includes(key));
-      if (blocked) event.preventDefault();
-    };
-    document.addEventListener("contextmenu", blockContextMenu);
-    document.addEventListener("keydown", blockShortcuts);
-    return () => {
-      document.removeEventListener("contextmenu", blockContextMenu);
-      document.removeEventListener("keydown", blockShortcuts);
-    };
-  }, []);
-
   const [loading, setLoading] = useState(true);
   const [session, setSession] = useState(null);
   const [profile, setProfile] = useState(null);
@@ -4157,6 +4378,7 @@ function App() {
   const [adminAccounts, setAdminAccounts] = useState([]);
   const [activityLog, setActivityLog] = useState([]);
   const [workSessions, setWorkSessions] = useState([]);
+  const [studySessions, setStudySessions] = useState([]);
 
   // instructor-scope data
   const [myStudents, setMyStudents] = useState([]);
@@ -4246,6 +4468,18 @@ function App() {
     const { error } = await supabaseClient.from("employee_work_sessions").update({ ...changes, updated_at: new Date().toISOString() }).eq("id", id);
     if (error) throw new Error(error.message);
     await refreshWorkSessions();
+  }
+  async function refreshStudySessions() {
+    const { data, error } = await supabaseClient.from("student_study_sessions").select("*").order("started_at", { ascending: false });
+    if (!error && data) setStudySessions(data.map(mapStudySessionRow));
+  }
+  async function saveStudySession(values) {
+    const { id, ...changes } = values;
+    const result = id
+      ? await supabaseClient.from("student_study_sessions").update(changes).eq("id", id)
+      : await supabaseClient.from("student_study_sessions").insert(changes);
+    if (result.error) throw new Error(result.error.message);
+    await refreshStudySessions();
   }
   async function refreshMyRecord(studentProfileId) {
     const { data: studentRow, error: studentError } = await supabaseClient.from("students").select("*").eq("profile_id", studentProfileId).single();
@@ -4533,6 +4767,11 @@ function App() {
         }
         if (profile.role === "admin") refreshStudents();
       })
+      .on("postgres_changes", { event: "*", schema: "public", table: "student_study_sessions" }, (payload) => {
+        const row = payload.new || payload.old || {};
+        const isRelevant = profile.role === "admin" || row.student_profile_id === profile.id || (profile.role === "instructor" && row.student_profile_id);
+        if (isRelevant) refreshStudySessions();
+      })
       .subscribe();
 
     profileChannel
@@ -4576,7 +4815,7 @@ function App() {
     }
     setProfile(p);
     const savedHash = window.location.hash || "";
-    const adminPages = ["dashboard", "requests", "financial", "invoice", "accounts", "work-hours", "instructors", "log", "student", "students", "add-student"];
+    const adminPages = ["dashboard", "requests", "study-report", "financial", "invoice", "accounts", "work-hours", "instructors", "log", "student", "students", "add-student"];
     const keepHash = ["admin", "accountant", "staff"].includes(p.role)
       ? adminPages.includes(savedHash.replace("#", ""))
         ? savedHash
@@ -4586,11 +4825,11 @@ function App() {
         : savedHash.startsWith("#student-") ? savedHash : "#student-home";
     window.history.replaceState(null, "", keepHash);
     if (["admin", "accountant", "staff"].includes(p.role)) {
-      await Promise.all([refreshStudents(), refreshInstructors(), refreshAdmins(), refreshLog(), refreshWorkSessions(), refreshLibrary(), refreshRequests("admin", p.id)]);
+      await Promise.all([refreshStudents(), refreshInstructors(), refreshAdmins(), refreshLog(), refreshWorkSessions(), refreshStudySessions(), refreshLibrary(), refreshRequests("admin", p.id)]);
     } else if (p.role === "instructor") {
-      await Promise.all([refreshMyStudents(p.id), refreshMyInstructor(p.id), refreshAttendance({ instructorProfileId: p.id }), refreshWorkSessions(), refreshLibrary(), refreshRequests("instructor", p.id)]);
+      await Promise.all([refreshMyStudents(p.id), refreshMyInstructor(p.id), refreshAttendance({ instructorProfileId: p.id }), refreshWorkSessions(), refreshStudySessions(), refreshLibrary(), refreshRequests("instructor", p.id)]);
     } else if (p.role === "student") {
-      await Promise.all([refreshMyRecord(p.id), refreshAttendance({ studentProfileId: p.id }), refreshLibrary(), refreshRequests("student", p.id)]);
+      await Promise.all([refreshMyRecord(p.id), refreshAttendance({ studentProfileId: p.id }), refreshStudySessions(), refreshLibrary(), refreshRequests("student", p.id)]);
     }
     setLoading(false);
   }
@@ -4616,6 +4855,7 @@ function App() {
         setAdminAccounts([]);
         setActivityLog([]);
         setWorkSessions([]);
+        setStudySessions([]);
         setMyStudents([]);
         setMyInstructor(null);
         setAttendance([]);
@@ -4723,6 +4963,7 @@ function App() {
           workSessions={workSessions}
           onSaveWorkSession={saveWorkSession}
           onUpdateWorkSession={updateWorkSession}
+          studySessions={studySessions}
           libraryBooks={libraryBooks}
           refreshLibrary={refreshLibrary}
           onUpdateLibraryBook={updateLibraryBook}
@@ -4753,7 +4994,7 @@ function App() {
       )}
 
       {session && profile && profile.role === "student" && myRecord && (
-        <StudentPortal student={myRecord} attendance={attendance} libraryBooks={libraryBooks} requests={requests} onSubmitRequest={submitStudentRequest} onDeleteRequest={deleteStudentRequest} onLogout={requestLogout} />
+        <StudentPortal student={myRecord} attendance={attendance} libraryBooks={libraryBooks} requests={requests} studySessions={studySessions.filter((item) => item.studentProfileId === myRecord.profileId)} onSaveStudySession={saveStudySession} onSubmitRequest={submitStudentRequest} onDeleteRequest={deleteStudentRequest} onLogout={requestLogout} />
       )}
       {showLogoutConfirm && <ConfirmActionModal title="تأكيد تسجيل الخروج" message="هل تريد تسجيل الخروج من النظام الآن؟" confirmLabel="تسجيل الخروج" onConfirm={() => { setShowLogoutConfirm(false); handleLogout(); }} onClose={() => setShowLogoutConfirm(false)} />}
     </div>
